@@ -98,7 +98,7 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             manager_id = row[0]
             await context.bot.send_message(
                 chat_id=manager_id,
-                text=f"👤 Ваш клиент зарегистрировался в боте:
+                text=f"👤 Ваш клиент зарегистрировался в боте:\nТелефон: {phone}"
 Телефон: {phone}"
             )
 
