@@ -17,7 +17,7 @@ from telegram.ext import (
 )
 
 API_TOKEN = "d579a8bdade5445c3683a0bb9526b657de79de53"  # токен API сайта
-BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "7521695008:AAF74fWXXOjWb4CBHwFJV8NdxeC6smbgo7A"
 BASE_URL = "https://www.autotechnik.store/api/v1"
 CHECK_INTERVAL = 600  # 10 минут
 
