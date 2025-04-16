@@ -1,130 +1,76 @@
-import logging
+import os
+import json
 import requests
-import sqlite3
-from telegram import (
-    Update,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-    CallbackContext,
-)
+import telebot
+from flask import Flask, request
 
-API_TOKEN = "d579a8bdade5445c3683a0bb9526b657de79de53"  # токен API сайта
-BOT_TOKEN = "7521695008:AAF74fWXXOjWb4CBHwFJV8NdxeC6smbgo7A"
-BASE_URL = "https://www.autotechnik.store/api/v1"
-CHECK_INTERVAL = 600  # 10 минут
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_TOKEN = os.getenv("API_TOKEN")
+API_URL = "https://www.autotechnik.store/api/v1/customers/"
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-conn = sqlite3.connect("users.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        telegram_id INTEGER PRIMARY KEY,
-        phone TEXT,
-        customer_id INTEGER,
-        last_status TEXT
-    )
-""")
-conn.commit()
+LINKS_FILE = "client_links.json"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[KeyboardButton("📱 Отправить номер телефона", request_contact=True)]]
-    await update.message.reply_text(
-        "Нажмите кнопку, чтобы отправить свой номер и получать уведомления о заказах:",
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
-    )
+def load_links():
+    return json.load(open(LINKS_FILE, encoding="utf-8")) if os.path.exists(LINKS_FILE) else {}
 
-async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contact = update.message.contact
-    phone = contact.phone_number
-    telegram_id = contact.user_id
+def save_links(data):
+    with open(LINKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
-    # Получаем клиента с сайта по номеру
-    response = requests.get(
-        f"{BASE_URL}/customers/?token={API_TOKEN}&phone={phone}"
-    ).json()
+def normalize_phone(phone):
+    phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if phone.startswith("+7"):
+        return phone
+    elif phone.startswith("8"):
+        return "+7" + phone[1:]
+    elif phone.startswith("7"):
+        return "+7" + phone[1:]
+    return phone
 
-    if not response.get("result"):
-        await update.message.reply_text("Клиент не найден.")
-        return
+def get_client_by_phone(phone):
+    response = requests.get(API_URL, params={"token": API_TOKEN, "phone": phone})
+    try:
+        return response.json().get("result", [None])[0]
+    except:
+        return None
 
-    customer_id = response["result"][0]["customerID"]
+@app.route("/status_notify", methods=["POST"])
+def status_notify():
+    try:
+        data = request.json
+        phone = normalize_phone(data.get("phone", ""))
+        order_id = data.get("order_id", "")
+        status = data.get("status", "").strip()
 
-    cursor.execute(
-        "INSERT OR REPLACE INTO users (telegram_id, phone, customer_id, last_status) VALUES (?, ?, ?, ?)",
-        (telegram_id, phone, customer_id, "")
-    )
-    conn.commit()
+        client = get_client_by_phone(phone)
+        if not client:
+            return {"status": "error", "message": "Клиент не найден через API"}, 404
 
-    await update.message.reply_text("✅ Номер принят! Вы будете получать статусы по заказам.", reply_markup=ReplyKeyboardRemove())
+        login = client.get("managerLogin")
+        links = load_links()
+        chat_id = links.get(login)
 
-async def check_orders(application):
-    while True:
-        cursor.execute("SELECT telegram_id, customer_id, last_status FROM users")
-        for telegram_id, customer_id, last_status in cursor.fetchall():
-            try:
-                response = requests.get(
-                    f"{BASE_URL}/customers/{customer_id}/orders/?token={API_TOKEN}"
-                ).json()
-                if "result" not in response:
-                    continue
-                for order in response["result"]:
-                    status = order.get("statusName", "")
-                    if status not in [
-                        "Готов к выдаче",
-                        "Готов к выдаче 3 день",
-                        "Готов к выдаче 4 день",
-                        "Готов к выдаче 5 день",
-                        "Готов к выдаче 6 день",
-                        "Готов к выдаче 7 день",
-                        "Выдано",
-                    ] or status == last_status:
-                        continue
+        if not chat_id:
+            return {"status": "error", "message": f"Telegram ID для логина {login} не найден"}, 404
 
-                    text = get_status_message(status)
-                    application.bot.send_message(chat_id=telegram_id, text=text)
+        # шаблоны сообщений
+        if status == "Готов к выдаче":
+            text = f"📦 Ваш заказ №{order_id} готов к выдаче. Срок хранения — 7 дней."
+        elif status == "Выдано":
+            text = f"✅ Заказ №{order_id} выдан. Вы можете вернуть товар в течение 7 дней."
+        elif status == "Готово к выдаче 3 дня":
+            text = f"🕒 Ваш заказ №{order_id} всё ещё ждёт вас на пункте выдачи."
+        elif status in ["Отказ клиента", "Отказ поставщика"]:
+            text = f"❗ Заказ №{order_id} отменён ({status}). Подробности уточните у менеджера."
+        else:
+            return {"status": "ignored", "message": "Статус не обрабатывается"}, 200
 
-                    cursor.execute(
-                        "UPDATE users SET last_status=? WHERE telegram_id=?",
-                        (status, telegram_id),
-                    )
-                    conn.commit()
-            except Exception as e:
-                print(f"Ошибка при проверке заказов: {e}")
-        await application.job_queue.run_once(lambda _: None, CHECK_INTERVAL)
-
-def get_status_message(status):
-    match status:
-        case "Готов к выдаче":
-            return "🧾 Ваш заказ готов к выдаче. Срок хранения — 7 дней."
-        case "Готов к выдаче 3 день":
-            return "📦 Напоминаем: заказ всё ещё ждёт вас (3-й день)."
-        case "Готов к выдаче 4 день":
-            return "📦 Напоминаем: заказ всё ещё ждёт вас (4-й день)."
-        case "Готов к выдаче 5 день":
-            return "📦 Напоминаем: заказ всё ещё ждёт вас (5-й день)."
-        case "Готов к выдаче 6 день":
-            return "⚠️ Срочно: завтра заказ будет отменён!"
-        case "Готов к выдаче 7 день":
-            return "❌ Сегодня после 20:00 заказ будет отменён."
-        case "Выдано":
-            return "✅ Заказ выдан. Доступен возврат в течение 7 дней."
-        case _:
-            return ""
+        bot.send_message(chat_id, text)
+        return {"status": "sent"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}, 500
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-
-    app.job_queue.run_repeating(lambda ctx: check_orders(app), interval=CHECK_INTERVAL)
-    print("Бот запущен.")
-    app.run_polling()
+    app.run(host="0.0.0.0", port=5000)
