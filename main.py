@@ -2,45 +2,34 @@ import logging
 import os
 import sqlite3
 import requests
-from telegram import (
-    Update,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_TOKEN = os.getenv("API_TOKEN")
 BASE_URL = "https://www.autotechnik.store/api/v1"
-CHECK_INTERVAL = 600  # 10 минут
+CHECK_INTERVAL = 600
 
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        telegram_id INTEGER PRIMARY KEY,
-        phone TEXT,
-        customer_id INTEGER,
-        last_status TEXT
-    );
+CREATE TABLE IF NOT EXISTS users (
+    telegram_id INTEGER PRIMARY KEY,
+    phone TEXT,
+    customer_id INTEGER,
+    last_status TEXT
+);
 """)
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS managers (
-        login TEXT PRIMARY KEY,
-        telegram_id INTEGER
-    );
+CREATE TABLE IF NOT EXISTS managers (
+    login TEXT PRIMARY KEY,
+    telegram_id INTEGER
+);
 """)
 cursor.execute("""
-    CREATE TABLE IF NOT EXISTS orders_sent (
-        order_id TEXT PRIMARY KEY
-    );
+CREATE TABLE IF NOT EXISTS orders_sent (
+    order_id TEXT PRIMARY KEY
+);
 """)
 conn.commit()
 
@@ -99,7 +88,6 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=manager_id,
                 text=f"👤 Ваш клиент зарегистрировался в боте:\nТелефон: {phone}"
-Телефон: {phone}"
             )
 
 async def register_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,9 +132,7 @@ async def check_orders(app):
         cursor.execute("SELECT telegram_id, customer_id, last_status FROM users")
         for telegram_id, customer_id, last_status in cursor.fetchall():
             try:
-                response = requests.get(
-                    f"{BASE_URL}/customers/{customer_id}/orders/?token={API_TOKEN}"
-                ).json()
+                response = requests.get(f"{BASE_URL}/customers/{customer_id}/orders/?token={API_TOKEN}").json()
                 if "result" not in response:
                     continue
                 for order in response["result"]:
@@ -154,7 +140,6 @@ async def check_orders(app):
                     status = order.get("statusName", "")
                     if not order_id or status == last_status:
                         continue
-
                     if status in [
                         "Готов к выдаче", "Готов к выдаче 3 день", "Готов к выдаче 4 день",
                         "Готов к выдаче 5 день", "Готов к выдаче 6 день", "Готов к выдаче 7 день",
@@ -164,7 +149,6 @@ async def check_orders(app):
                         app.bot.send_message(chat_id=telegram_id, text=text)
                         cursor.execute("UPDATE users SET last_status=? WHERE telegram_id=?", (status, telegram_id))
                         conn.commit()
-
             except Exception as e:
                 print(f"Ошибка проверки заказов: {e}")
         await app.job_queue.run_once(lambda _: None, CHECK_INTERVAL)
