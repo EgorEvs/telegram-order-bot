@@ -65,10 +65,9 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matched_customer = None
     for customer in response["result"]:
         customer_phone = customer.get("phone")
-if not customer_phone:
-    continue  # пропускаем клиента без номера
-normalized = normalize_phone(customer_phone)
-
+        if not customer_phone:
+            continue
+        normalized = normalize_phone(customer_phone)
         if normalized == phone:
             matched_customer = customer
             break
